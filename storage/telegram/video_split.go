@@ -284,6 +284,7 @@ func (t *Telegram) uploadLosslessVideoParts(
 	tctx *ext.Context,
 	storagePath string,
 	parts []losslessVideoPart,
+	sourceCaption *string,
 	progress *uploadProgress,
 ) error {
 	if len(parts) == 0 {
@@ -298,7 +299,7 @@ func (t *Telegram) uploadLosslessVideoParts(
 	}
 
 	prepared := make([]preparedMedia, 0, len(parts))
-	for _, part := range parts {
+	for index, part := range parts {
 		partFile, err := os.Open(part.Path)
 		if err != nil {
 			return fmt.Errorf("failed to open video part %s: %w", part.Name, err)
@@ -309,7 +310,7 @@ func (t *Telegram) uploadLosslessVideoParts(
 			partFile,
 			partStoragePath(storagePath, part.Name),
 			part.Size,
-			nil,
+			videoPartCaption(sourceCaption, index),
 			progress,
 		)
 		closeErr := partFile.Close()
@@ -341,4 +342,15 @@ func (t *Telegram) uploadLosslessVideoParts(
 		}
 	}
 	return nil
+}
+
+func videoPartCaption(sourceCaption *string, index int) *string {
+	if sourceCaption == nil {
+		return nil
+	}
+	if index == 0 {
+		return sourceCaption
+	}
+	empty := ""
+	return &empty
 }

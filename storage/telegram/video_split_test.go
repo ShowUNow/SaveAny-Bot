@@ -60,6 +60,22 @@ func TestPartStoragePath(t *testing.T) {
 	}
 }
 
+func TestVideoPartCaption(t *testing.T) {
+	if got := videoPartCaption(nil, 0); got != nil {
+		t.Fatalf("caption without source = %q, want nil", *got)
+	}
+
+	source := "original caption"
+	first := videoPartCaption(&source, 0)
+	if first == nil || *first != source {
+		t.Fatalf("first part caption = %v, want %q", first, source)
+	}
+	second := videoPartCaption(&source, 1)
+	if second == nil || *second != "" {
+		t.Fatalf("second part caption = %v, want an explicit empty caption", second)
+	}
+}
+
 func TestSplitLosslessVideoRetriesOversizedPart(t *testing.T) {
 	tempDir := t.TempDir()
 	inputPath := filepath.Join(tempDir, "source.mov")

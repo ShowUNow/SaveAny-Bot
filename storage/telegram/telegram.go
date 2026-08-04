@@ -104,6 +104,7 @@ func (t *Telegram) SaveWithProgress(
 
 func (t *Telegram) save(ctx context.Context, r io.Reader, storagePath string, progress *uploadProgress) error {
 	storagePath = path.Clean(storagePath)
+	captionOverride := sourceCaptionOverride(ctx)
 	tctx := tgutil.ExtFromContext(ctx)
 	if tctx == nil {
 		return fmt.Errorf("failed to get telegram context")
@@ -164,7 +165,7 @@ func (t *Telegram) save(ctx context.Context, r io.Reader, storagePath string, pr
 						for _, part := range parts {
 							log.FromContext(ctx).Infof("Prepared lossless video part %s (%d bytes)", part.Name, part.Size)
 						}
-						return t.uploadLosslessVideoParts(ctx, tctx, storagePath, parts, progress)
+						return t.uploadLosslessVideoParts(ctx, tctx, storagePath, parts, captionOverride, progress)
 					}
 					if _, seekErr := rs.Seek(0, io.SeekStart); seekErr != nil {
 						return fmt.Errorf("failed to seek large video before ZIP fallback: %w", seekErr)
@@ -178,7 +179,7 @@ func (t *Telegram) save(ctx context.Context, r io.Reader, storagePath string, pr
 	if err := t.limiter.Wait(ctx); err != nil {
 		return fmt.Errorf("rate limit failed: %w", err)
 	}
-	prepared, err := t.prepareMedia(ctx, tctx, r, storagePath, size, nil, progress)
+	prepared, err := t.prepareMedia(ctx, tctx, r, storagePath, size, captionOverride, progress)
 	if err != nil {
 		return err
 	}
@@ -196,6 +197,14 @@ func contentLength(ctx context.Context) int64 {
 		}
 	}
 	return -1
+}
+
+func sourceCaptionOverride(ctx context.Context) *string {
+	caption, ok := storagetypes.SourceCaptionFromContext(ctx)
+	if !ok {
+		return nil
+	}
+	return &caption
 }
 
 func (t *Telegram) splitSize() int64 {
@@ -467,6 +476,9 @@ func (t *Telegram) saveMediaGroup(
 				return fmt.Errorf("failed to seek batch item: %w", err)
 			}
 			itemCtx := context.WithValue(ctx, ctxkey.ContentLength, item.Size)
+			if item.PreserveCaption {
+				itemCtx = storagetypes.WithSourceCaption(itemCtx, item.Caption)
+			}
 			if onProgress == nil {
 				return t.Save(itemCtx, item.Reader, item.StoragePath)
 			}
