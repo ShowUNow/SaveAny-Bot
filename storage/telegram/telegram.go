@@ -113,7 +113,8 @@ func (t *Telegram) save(ctx context.Context, r io.Reader, storagePath string, pr
 		log.FromContext(ctx).Warnf("Skipping file larger than Telegram limit (%d bytes): %d bytes", MaxUploadFileSize, size)
 		return nil
 	}
-	if size > t.splitSize() {
+	splitSize := min(t.splitSize(), int64(MaxUploadFileSize))
+	if size > splitSize {
 		filename, chatID := t.target(tctx, path.Clean(storagePath))
 		if filename == "" {
 			if rs, ok := r.(io.ReadSeeker); ok {
@@ -135,7 +136,43 @@ func (t *Telegram) save(ctx context.Context, r io.Reader, storagePath string, pr
 		if err := t.limiter.Wait(ctx); err != nil {
 			return fmt.Errorf("rate limit failed: %w", err)
 		}
-		return t.splitUpload(tctx, r, filename, upler, peer, size, t.splitSize(), progress)
+		if t.config.SplitLargeVideo {
+			rs, ok := r.(io.ReadSeeker)
+			if ok {
+				mtype, detectErr := mimetype.DetectReader(rs)
+				if _, seekErr := rs.Seek(0, io.SeekStart); seekErr != nil {
+					return fmt.Errorf("failed to seek large file after mimetype detection: %w", seekErr)
+				}
+				if detectErr != nil {
+					log.FromContext(ctx).Warnf("Failed to detect large file type, falling back to ZIP split: %s", detectErr)
+				} else if strings.HasPrefix(mtype.String(), "video/") {
+					parts, cleanup, splitErr := createLosslessVideoParts(
+						ctx,
+						rs,
+						filename,
+						size,
+						splitSize,
+					)
+					if splitErr != nil {
+						if ctx.Err() != nil {
+							return ctx.Err()
+						}
+						log.FromContext(ctx).Warnf("Lossless video split failed, falling back to ZIP split: %s", splitErr)
+					} else {
+						defer cleanup()
+						log.FromContext(ctx).Infof("Uploading oversized video as %d lossless-playable parts", len(parts))
+						for _, part := range parts {
+							log.FromContext(ctx).Infof("Prepared lossless video part %s (%d bytes)", part.Name, part.Size)
+						}
+						return t.uploadLosslessVideoParts(ctx, tctx, storagePath, parts, progress)
+					}
+					if _, seekErr := rs.Seek(0, io.SeekStart); seekErr != nil {
+						return fmt.Errorf("failed to seek large video before ZIP fallback: %w", seekErr)
+					}
+				}
+			}
+		}
+		return t.splitUpload(tctx, r, filename, upler, peer, size, splitSize, progress)
 	}
 
 	if err := t.limiter.Wait(ctx); err != nil {
@@ -359,7 +396,8 @@ func (t *Telegram) saveBatch(
 func (t *Telegram) inspectBatchItem(tctx *ext.Context, item storagetypes.BatchItem) (batchMediaItem, error) {
 	_, chatID := t.target(tctx, path.Clean(item.StoragePath))
 	result := batchMediaItem{item: item, chatID: chatID}
-	if (t.config.SkipLarge && item.Size > MaxUploadFileSize) || item.Size > t.splitSize() {
+	if (t.config.SkipLarge && item.Size > MaxUploadFileSize) ||
+		item.Size > min(t.splitSize(), int64(MaxUploadFileSize)) {
 		result.useSingleSave = true
 		return result, nil
 	}
